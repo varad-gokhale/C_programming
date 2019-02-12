@@ -125,9 +125,18 @@ void test_memcpy()
   memcpy_s(s2,s1,len1+1,len2+1,&err);
   assert(err == ERROR_OVERFLOW);
   
+  //wmask bits not the same(cannot align)
+  memcpy_s(s1, s2+1, len2, len1+1, &err);
+  assert(err == NO_ERROR);
+  
+  //wmask bits the same but don't start at word boundary
+  memcpy_s(s1+2, s2+2, len2-1, len1-1, &err);
+  assert(err == NO_ERROR);
+  
   //normal case
   memcpy_s(s1, s2, len2+1, len1+1, &err);
   assert(err == NO_ERROR);
+  
   
   printf("And the winner is - %s \n", s1);
   

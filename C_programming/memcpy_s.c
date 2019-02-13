@@ -1,147 +1,120 @@
 #include <stdio.h>
 #include <assert.h>
-#include <string.h>
-
-#define SIZE_MAX_LIMIT 500
-#define word int
-#define wsize sizeof(word)
-#define wmask wsize-1
+#include <stdlib.h>
+#include <pthread.h>
 
 typedef enum{
-  NO_ERROR=0,
-  ERROR_NULL,
-  ERROR_SZERO,
-  ERROR_SMAX,
-  ERROR_OVERLAP,
-  ERROR_OVERFLOW,
+  NO_ERROR = 0,
+  ERROR_LOW_MEMORY,
+  ERROR_STACK_FULL,
+  ERROR_STACK_EMPTY
 }error_t;
 
-void* memcpy_s(void *d0, void *s0, size_t smax, size_t dmax, error_t *err)
-{   
-  // printf("dmax = %d\n",(size_t)dmax > (size_t)SIZE_MAX_LIMIT);
-  char *d = (char*)d0, *s = (char*)s0;
-  
-  if(d0 == NULL || s0 == NULL)
-  {
-    *err = ERROR_NULL;
-    return NULL;
-  }
-  else if(dmax == 0 || smax == 0)
-  {
-    *err = ERROR_SZERO;
-    return NULL;
-  }
-  else if(dmax > SIZE_MAX_LIMIT)
-  {
-    *err = ERROR_SMAX;
-    return NULL;
-  }
-  else if(((d < s) && (s < d+dmax)) || ((s < d) && (d < s+smax)))
-  {
-    *err = ERROR_OVERLAP;
-    return NULL;
-  }
-  else if(dmax < smax)
-  {
-    *err = ERROR_OVERFLOW;
-    return NULL;
-  }
-  
-  *err = NO_ERROR;
-  if(d == s)  return d;
-  
-  size_t t = (size_t)s;
-  size_t temp = 0;
-  
-  if((((size_t)s) | ((size_t)d)) & (wmask)){               // if not word-aligned
-        // if last 2 bits are not the same, can't align, or if dmax < wsize, no need to
-    if(((((size_t)s)&(wmask)) ^ (((size_t)d)&(wmask))) || dmax < (wsize))
-    {
-      t = dmax;
-      temp = t;
-      while(t){*d++ = *s++; --t;}
-      return d0;
-    }
-    else
-    {
-      t = wsize - ((size_t)s & (wmask));
-      temp = t;
-      while(t){*d++ = *s++; --t;}
-    }
-  }
-  dmax -= temp;
-  t = dmax/wsize;
-  while(t){
-    *((word*)d) = *((word*)s); 
-    d += wsize; 
-    s += wsize;
-    --t;
-  }
-  t = dmax & wsize;
-  while(t){*d++ = *s++; --t;}
-  
-  return d0;
-  
-}
-void test_memcpy()
-{
-  char s1[] = "Goliath";
-  char s2[] = "David";
-  
-  int len1 = strlen(s1);
-  int len2 = strlen(s2);
-    
-  error_t err = NO_ERROR;
-  
-  //test case 1: destination is null
-  memcpy_s(NULL, s1, len1+1, len2+1, &err);
-  assert(err == ERROR_NULL);
-  
-  //test case 1: source is null
-  memcpy_s(s2, NULL, len1+1, len2+1, &err);
-  assert(err == ERROR_NULL);
-  
-  //dmax = 0
-  memcpy_s(s2,s1,len1+1, 0 ,&err);
-  assert(err == ERROR_SZERO);
-  
-  //smax = 0
-  memcpy_s(s2,s1,0, len2+1,&err);
-  assert(err == ERROR_SZERO);
-  
-  //dmax is too big
-  memcpy_s(s2,s1,len1+1, 700,&err);
-  assert(err == ERROR_SMAX);
+typedef struct{
+  int capacity;
+  int *arr;
+  int top;
+  pthread_mutex_t lock;
+}stack_t;
 
-  //overlap(dest < src)
-  memcpy_s(s2,s2+1,len2,len2-1,&err);
-  assert(err == ERROR_OVERLAP);
+stack_t* create_stack(int capacity, error_t *err)
+{
+  stack_t* s = (stack_t*)malloc(sizeof(stack_t));
+  if(s == NULL){
+    *err = ERROR_LOW_MEMORY;
+  }
+  s -> capacity = capacity;
+  s -> top = 0;
+  s -> arr = (int*)malloc(sizeof(int)*capacity);
   
-  //overlap(dest > src)
-  memcpy_s(s1+3,s1,len1,len1-3,&err);
-  assert(err == ERROR_OVERLAP);
+  pthread_mutex_init(&s->lock, NULL);
   
-  //overflow -> dest < src
-  memcpy_s(s2,s1,len1+1,len2+1,&err);
-  assert(err == ERROR_OVERFLOW);
-  
-  //wmask bits not the same(cannot align)
-  memcpy_s(s1, s2+1, len2, len1+1, &err);
-  assert(err == NO_ERROR);
-  
-  //wmask bits the same but don't start at word boundary
-  memcpy_s(s1+2, s2+2, len2-1, len1-1, &err);
-  assert(err == NO_ERROR);
-  
-  //normal case
-  memcpy_s(s1, s2, len2+1, len1+1, &err);
-  assert(err == NO_ERROR);
-  
-  
-  printf("And the winner is - %s \n", s1);
-  
+  return s;
 }
+
+void push(stack_t* s, int a, error_t *err)
+{
+  pthread_mutex_lock(&s->lock);
+  
+  if(s->top == s->capacity){
+    *err = ERROR_STACK_FULL;
+    pthread_mutex_unlock(&s->lock);
+    return;
+  }
+  s->arr[s->top++] = a;
+  *err = NO_ERROR;
+  
+  pthread_mutex_unlock(&s->lock);
+}
+
+int pop(stack_t* s, error_t* err){
+  pthread_mutex_lock(&s->lock);
+  
+  if(s->top == 0){
+    *err = ERROR_STACK_EMPTY;
+    pthread_mutex_unlock(&s->lock);
+    return 0;
+  }
+  s->top -= 1;
+  *err = NO_ERROR;
+  
+  pthread_mutex_unlock(&s->lock);
+  
+  return s->arr[s->top];
+}
+
+void free_stack(stack_t *s){
+  free(s->arr);
+  pthread_mutex_destroy(&s->lock);
+  free(s);
+}
+// To execute C, please define "int main()"
+
 int main() {
-  test_memcpy();
+  error_t err = NO_ERROR;
+  stack_t* s = create_stack(3, &err);
+  
+  push(s, 1, &err);
+  assert(err == NO_ERROR);
+  
+  push(s,2,&err);
+  assert(err == NO_ERROR);
+  
+  push(s,3,&err);
+  assert(err == NO_ERROR);
+  
+  push(s,4,&err);
+  assert(err == ERROR_STACK_FULL);
+  
+  assert(pop(s,&err) == 3);
+  
+  assert(pop(s,&err) == 2);
+  
+  assert(pop(s,&err) == 1);
+  
+  pop(s,&err);
+  assert(err == ERROR_STACK_EMPTY);
+  
+  push(s,2,&err);
+  assert(err == NO_ERROR);
+  
+  push(s,1,&err);
+  assert(err == NO_ERROR); 
+  
+  assert(pop(s,&err) == 1);
+
+  push(s,2,&err);
+  assert(err == NO_ERROR);
+  
+  assert(pop(s,&err) == 2);
+  
+  assert(pop(s,&err) == 2);
+  
+  pop(s,&err);
+  assert(err == ERROR_STACK_EMPTY);
+  
+  
+  free_stack(s);
+  
   return 0;
 }
